@@ -1,0 +1,16 @@
+services:
+  kariheya:
+    build:
+      context: ./bot
+      dockerfile: Dockerfile
+    container_name: kariheya
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /app/data
+    volumes:
+      - kariheya-data:/app/data
+
+volumes:
+  kariheya-data:
