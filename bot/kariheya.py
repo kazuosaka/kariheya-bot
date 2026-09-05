@@ -5,12 +5,12 @@ import os
 import time
 
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 
 from db import Database
+from lifecycle import RoomLifecycleMixin
 from ui import (
     CreatePanel,
-    GRACE_SECONDS,
     MAX_LIMIT,
     ROOM_NAME_PREFIX,
     WAIT_FIRST_JOIN_SECONDS,
@@ -24,7 +24,7 @@ from ui import (
 )
 
 
-class KariheyaBot(commands.Bot):
+class KariheyaBot(RoomLifecycleMixin, commands.Bot):
     def __init__(self) -> None:
         intents = discord.Intents.default()
         super().__init__(command_prefix=commands.when_mentioned, intents=intents, help_command=None)
@@ -104,3 +104,37 @@ class KariheyaBot(commands.Bot):
         else:
             await interaction.response.send_message(msg, ephemeral=True)
         return False
+
+    async def create_room(
+        self,
+        interaction: discord.Interaction,
+        *,
+        name: str | None,
+        limit: int,
+    ) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message("サーバー内でのみ使えます。", ephemeral=True)
+            return
+        if not await self.ensure_can_create(interaction):
+            return
+        existing = await self.store.get_room_by_owner(interaction.guild.id, interaction.user.id)
+        if existing is not None:
+            voice = interaction.guild.get_channel(existing["voice_id"])
+            if isinstance(voice, discord.VoiceChannel):
+                await interaction.response.send_message(
+                    f"すでに {voice.mention} を持っています。1人1部屋までです。",
+                    ephemeral=True,
+                )
+                return
+            await self.store.delete_room(existing["voice_id"])
+        if limit < 0 or limit > MAX_LIMIT:
+            await interaction.response.send_message(
+                f"人数上限は 0〜{MAX_LIMIT} です（0は制限なし）。",
+                ephemeral=True,
+            )
+            return
+
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+
+        settings = await bot_settings(interaction)
