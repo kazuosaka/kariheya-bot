@@ -58,6 +58,12 @@ class Database:
             await self._db.execute(
                 "ALTER TABLE rooms ADD COLUMN occupied INTEGER NOT NULL DEFAULT 0"
             )
+        cur = await self._db.execute("PRAGMA table_info(guild_settings)")
+        gcols = {row[1] for row in await cur.fetchall()}
+        if "room_prefix" not in gcols:
+            await self._db.execute(
+                "ALTER TABLE guild_settings ADD COLUMN room_prefix TEXT NOT NULL DEFAULT '仮音声通話'"
+            )
         await self._db.commit()
 
     @property
@@ -73,10 +79,28 @@ class Database:
 
     async def get_settings(self, guild_id: int) -> aiosqlite.Row | None:
         cur = await self.db.execute(
-            "SELECT guild_id, category_id, grace_seconds FROM guild_settings WHERE guild_id = ?",
+            "SELECT guild_id, category_id, grace_seconds, room_prefix FROM guild_settings WHERE guild_id = ?",
             (guild_id,),
         )
         return await cur.fetchone()
+
+    async def get_room_prefix(self, guild_id: int) -> str:
+        settings = await self.get_settings(guild_id)
+        if settings is None:
+            return "仮音声通話"
+        prefix = str(settings["room_prefix"] or "").strip()
+        return prefix or "仮音声通話"
+
+    async def upsert_room_prefix(self, guild_id: int, prefix: str) -> None:
+        await self.db.execute(
+            """
+            INSERT INTO guild_settings (guild_id, room_prefix)
+            VALUES (?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET room_prefix = excluded.room_prefix
+            """,
+            (guild_id, prefix),
+        )
+        await self.db.commit()
 
     async def upsert_category(self, guild_id: int, category_id: int) -> None:
         await self.db.execute(
@@ -84,8 +108,7 @@ class Database:
             INSERT INTO guild_settings (guild_id, category_id)
             VALUES (?, ?)
             ON CONFLICT(guild_id) DO UPDATE SET category_id = excluded.category_id
-            """
-            ,
+            """,
             (guild_id, category_id),
         )
         await self.db.commit()
@@ -120,8 +143,7 @@ class Database:
             ON CONFLICT(channel_id) DO UPDATE SET
                 guild_id = excluded.guild_id,
                 user_limit = excluded.user_limit
-            """
-            ,
+            """,
             (channel_id, guild_id, user_limit),
         )
         await self.db.commit()
@@ -172,8 +194,7 @@ class Database:
             """
             INSERT INTO rooms (voice_id, text_id, guild_id, owner_id, user_limit, created_at, occupied)
             VALUES (?, ?, ?, ?, ?, ?, 0)
-            """
-            ,
+            """,
             (voice_id, text_id, guild_id, owner_id, user_limit, created_at),
         )
         await self.db.commit()

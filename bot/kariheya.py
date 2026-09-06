@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 
@@ -11,18 +12,19 @@ from db import Database
 from lifecycle import RoomLifecycleMixin
 from ui import (
     CreatePanel,
+    DEFAULT_HUB_LIMITS,
+    GRACE_SECONDS,
     MAX_LIMIT,
-    ROOM_NAME_PREFIX,
     WAIT_FIRST_JOIN_SECONDS,
     describe_http_error,
     format_bot_access,
     format_limit,
+    hub_channel_name,
     human_members,
     log,
     next_room_number,
     sanitize_name,
 )
-
 
 class KariheyaBot(RoomLifecycleMixin, commands.Bot):
     def __init__(self) -> None:
@@ -151,11 +153,12 @@ class KariheyaBot(RoomLifecycleMixin, commands.Bot):
             return
 
         owner = interaction.user
+        prefix = await self.store.get_room_prefix(interaction.guild.id)
         async with self._create_lock:
             if name:
                 room_name = sanitize_name(name)
             else:
-                room_name = f"{ROOM_NAME_PREFIX}_{next_room_number(category)}"
+                room_name = f"{prefix}_{next_room_number(category, prefix)}"
 
             voice = None
             text = None

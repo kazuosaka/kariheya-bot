@@ -25,7 +25,6 @@ GRACE_SECONDS = 20
 WAIT_FIRST_JOIN_SECONDS = 300
 MAX_LIMIT = 99
 ROOM_NAME_PREFIX = "仮音声通話"
-ROOM_NAME_RE = re.compile(rf"^{re.escape(ROOM_NAME_PREFIX)}_(\d+)$")
 DEFAULT_HUB_LIMITS = [0, 2, 4, 5, 10]
 
 
@@ -35,10 +34,17 @@ def sanitize_name(name: str) -> str:
     return (cleaned or "部屋")[:100]
 
 
-def next_room_number(category: discord.CategoryChannel) -> int:
+def sanitize_prefix(name: str) -> str:
+    cleaned = "".join(ch for ch in name.strip() if ch not in "#,:" )
+    cleaned = " ".join(cleaned.split())
+    return cleaned[:80]
+
+
+def next_room_number(category: discord.CategoryChannel, prefix: str) -> int:
+    pat = re.compile(rf"^{re.escape(prefix)}_(\d+)$")
     max_n = 0
     for channel in category.channels:
-        matched = ROOM_NAME_RE.match(channel.name)
+        matched = pat.match(channel.name)
         if matched:
             max_n = max(max_n, int(matched.group(1)))
     return max_n + 1
@@ -52,8 +58,9 @@ def format_limit(limit: int) -> str:
     return "制限なし" if limit <= 0 else f"{limit}人"
 
 
-def hub_channel_name(limit: int) -> str:
-    return f"＋ 仮部屋を作る（{format_limit(limit)}）"
+def hub_channel_name(limit: int, prefix: str | None = None) -> str:
+    name = (prefix or ROOM_NAME_PREFIX).strip() or ROOM_NAME_PREFIX
+    return f"＋ {name}（{format_limit(limit)}）"
 
 
 def yesno(value: bool) -> str:
