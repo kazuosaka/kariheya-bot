@@ -15,10 +15,20 @@ from kariheya import (
     format_limit,
     hub_channel_name,
 )
-from room_extra import register_rename, register_setup_name
+from room_extra import attach_bind, register_rename, register_setup_name, register_silence
 
 setup = app_commands.Group(name="setup", description="仮部屋の管理者設定")
 room = app_commands.Group(name="room", description="一時ボイス部屋")
+owner = app_commands.Group(
+    name="owner",
+    description="ボット運用者専用",
+    default_permissions=discord.Permissions.none(),
+)
+owner_bind_only = app_commands.Group(
+    name="owner",
+    description="ボット運用者専用",
+    default_permissions=discord.Permissions.none(),
+)
 
 
 @setup.command(name="category", description="一時部屋を作るカテゴリを指定します")
@@ -341,6 +351,8 @@ async def on_app_error(
     if isinstance(error, app_commands.MissingPermissions):
         msg = "この操作には「チャンネルの管理」権限が必要です。"
     elif isinstance(error, app_commands.CheckFailure):
+        if interaction.guild is not None and await bot.store.is_guild_disabled(interaction.guild.id):
+            return
         msg = "この操作を実行する権限がありません。"
     else:
         log.exception("command error")
@@ -353,8 +365,23 @@ async def on_app_error(
 
 register_rename(room, bot)
 register_setup_name(setup, bot)
+register_silence(owner, bot)
+attach_bind(owner_bind_only, bot)
+bot.owner_group = owner
 bot.tree.add_command(setup)
 bot.tree.add_command(room)
+_owner_guild = os.getenv("OWNER_GUILD_ID", "").strip()
+if _owner_guild:
+    bot.tree.add_command(owner, guild=discord.Object(id=int(_owner_guild)))
+else:
+    bot.tree.add_command(owner_bind_only)
+
+
+@bot.tree.interaction_check
+async def reject_silenced_guild(interaction: discord.Interaction) -> bool:
+    if interaction.guild is not None and await bot.store.is_guild_disabled(interaction.guild.id):
+        return False
+    return True
 
 
 def main() -> None:
