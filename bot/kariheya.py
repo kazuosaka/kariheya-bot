@@ -137,4 +137,130 @@ class KariheyaBot(RoomLifecycleMixin, commands.Bot):
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
 
-        settings = await bot_settings(interaction)
+        settings = await self.store.get_settings(interaction.guild.id)
+        category: discord.CategoryChannel | None = None
+        if settings and settings["category_id"]:
+            found = interaction.guild.get_channel(settings["category_id"])
+            if isinstance(found, discord.CategoryChannel):
+                category = found
+        if category is None:
+            await interaction.followup.send(
+                "先に `/setup category` で一時部屋のカテゴリを指定してください。",
+                ephemeral=True,
+            )
+            return
+
+        owner = interaction.user
+        async with self._create_lock:
+            if name:
+                room_name = sanitize_name(name)
+            else:
+                room_name = f"{ROOM_NAME_PREFIX}_{next_room_number(category)}"
+
+            voice = None
+            text = None
+            stage = "準備"
+            try:
+                stage = "ボイス作成"
+                voice = await category.create_voice_channel(
+                    name=room_name,
+                    user_limit=limit,
+                    reason=f"{owner} が一時ボイスを作成",
+                )
+                stage = "テキスト作成"
+                text = await category.create_text_channel(
+                    name=room_name,
+                    topic=f"「{room_name}」の専用チャット。カテゴリの権限を持つメンバーが使えます。",
+                    reason=f"{owner} が一時テキストを作成",
+                )
+            except discord.Forbidden as exc:
+                if voice is not None:
+                    try:
+                        await voice.delete()
+                    except discord.HTTPException:
+                        pass
+                log.exception("forbidden while creating room at %s", stage)
+                await interaction.followup.send(
+                    "チャンネルを作る権限がありません。\n"
+                    f"失敗した段階: **{stage}**\n"
+                    f"{describe_http_error(exc)}\n"
+                    f"{format_bot_access(interaction.guild, category)}",
+                    ephemeral=True,
+                )
+                return
+            except discord.HTTPException as exc:
+                if voice is not None:
+                    try:
+                        await voice.delete()
+                    except discord.HTTPException:
+                        pass
+                log.exception("failed to create room at %s", stage)
+                await interaction.followup.send(
+                    f"部屋を作れませんでした。\n失敗した段階: **{stage}**\n"
+                    f"{describe_http_error(exc)}\n"
+                    f"{format_bot_access(interaction.guild, category)}",
+                    ephemeral=True,
+                )
+                return
+
+        await self.store.add_room(
+            voice_id=voice.id,
+            text_id=text.id,
+            guild_id=interaction.guild.id,
+            owner_id=owner.id,
+            user_limit=limit,
+            created_at=int(time.time()),
+        )
+
+        moved_note = await self.move_creator_to_voice(owner, voice)
+
+        await text.send(
+            content=f"{owner.mention} がこの部屋を作りました。カテゴリの権限を持つメンバーはテキストを閲覧・投稿できます。",
+            embed=discord.Embed(
+                title=room_name,
+                description=(
+                    f"人数上限: **{format_limit(limit)}**\n"
+                    f"ボイス: {voice.mention}\n"
+                    "全員がボイスを出ると、ボイスとテキストの両方を削除します。"
+                ),
+                color=0xC9893A,
+            ),
+        )
+
+        await interaction.followup.send(
+            f"部屋を作りました。\nボイス: {voice.mention}\nテキスト: {text.mention}\n"
+            f"人数上限: {format_limit(limit)}\n{moved_note}",
+            ephemeral=True,
+        )
+
+    async def move_creator_to_voice(
+        self,
+        owner: discord.Member,
+        voice: discord.VoiceChannel,
+    ) -> str:
+        current = owner.voice.channel if owner.voice else None
+        if not isinstance(current, discord.VoiceChannel):
+            return (
+                "いま通話に入っていないため、自動では参加できません。"
+                f"{voice.mention} をクリックして入ってください。"
+                "（Discordの仕様で、未参加の人をボットが通話に入れることはできません）\n"
+                f"{WAIT_FIRST_JOIN_SECONDS // 60}分以内に誰も入らないと部屋を消します。"
+            )
+        if current.id == voice.id:
+            await self.store.mark_occupied(voice.id)
+            return "作成したボイスに参加しています。"
+        try:
+            await owner.move_to(voice, reason="作成した一時ボイスへ移動")
+            await self.store.mark_occupied(voice.id)
+            return "作成したボイスへ移動しました。"
+        except discord.Forbidden:
+            return (
+                "自動移動する権限が足りません。"
+                f"{voice.mention} に手動で参加してください。"
+            )
+        except discord.HTTPException as exc:
+            log.warning("could not move creator %s: %s", owner.id, exc)
+            return f"自動移動できませんでした。{voice.mention} に参加してください。"
+
+
+bot = KariheyaBot()
