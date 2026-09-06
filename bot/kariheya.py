@@ -4,11 +4,14 @@ import asyncio
 import logging
 import os
 import time
+from pathlib import Path
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from db import Database
+from envfile import configured_owner_guild_id, write_owner_guild_id
 from lifecycle import RoomLifecycleMixin
 from ui import (
     CreatePanel,
@@ -33,11 +36,13 @@ class KariheyaBot(RoomLifecycleMixin, commands.Bot):
         self.store = Database()
         self._deletes: dict[int, asyncio.Task] = {}
         self._create_lock = asyncio.Lock()
+        self.owner_group: app_commands.Group | None = None
 
     async def setup_hook(self) -> None:
         await self.store.connect()
         self.add_view(CreatePanel(self))
         guild_id = os.getenv("GUILD_ID", "").strip()
+        owner_guild_id = configured_owner_guild_id()
         if guild_id:
             guild = discord.Object(id=int(guild_id))
             self.tree.copy_global_to(guild=guild)
@@ -46,7 +51,38 @@ class KariheyaBot(RoomLifecycleMixin, commands.Bot):
         else:
             synced = await self.tree.sync()
             log.info("synced %s global commands", len(synced))
+        if owner_guild_id and owner_guild_id != guild_id:
+            extra = await self.tree.sync(guild=discord.Object(id=int(owner_guild_id)))
+            log.info("synced %s owner commands to guild %s", len(extra), owner_guild_id)
         self.sweep_empty_rooms.start()
+
+    async def lock_owner_guild(self, guild: discord.Guild) -> Path:
+        path = write_owner_guild_id(guild.id)
+        if self.owner_group is None:
+            return path
+        existing = self.tree.get_command("owner")
+        if existing is not None:
+            self.tree.remove_command("owner")
+        self.tree.add_command(self.owner_group, guild=guild)
+        await self.tree.sync()
+        await self.tree.sync(guild=guild)
+        log.info("locked owner commands to guild %s (%s)", guild.id, guild.name)
+        return path
+
+    async def is_owner_user(self, user_id: int) -> bool:
+        app = self.application
+        if app is None:
+            app = await self.application_info()
+        if app.owner is not None and app.owner.id == user_id:
+            return True
+        if app.team is not None:
+            return any(member.id == user_id for member in app.team.members)
+        return False
+
+    async def is_guild_silenced(self, guild_id: int | None) -> bool:
+        if guild_id is None:
+            return False
+        return await self.store.is_guild_disabled(guild_id)
 
     async def close(self) -> None:
         for task in list(self._deletes.values()):
@@ -62,6 +98,8 @@ class KariheyaBot(RoomLifecycleMixin, commands.Bot):
     async def restore_rooms(self) -> None:
         stale: list[int] = []
         for row in await self.store.list_rooms():
+            if await self.store.is_guild_disabled(row["guild_id"]):
+                continue
             guild = self.get_guild(row["guild_id"])
             if guild is None:
                 continue
@@ -116,6 +154,8 @@ class KariheyaBot(RoomLifecycleMixin, commands.Bot):
     ) -> None:
         if interaction.guild is None or not isinstance(interaction.user, discord.Member):
             await interaction.response.send_message("サーバー内でのみ使えます。", ephemeral=True)
+            return
+        if await self.store.is_guild_disabled(interaction.guild.id):
             return
         if not await self.ensure_can_create(interaction):
             return
