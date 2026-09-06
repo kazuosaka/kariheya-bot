@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import discord
+from discord import app_commands
 
 from ui import describe_http_error
 
@@ -105,3 +106,27 @@ async def lock_category_creation(bot, category: discord.CategoryChannel) -> str:
             + ", ".join(f"`{name}`" for name in skipped_high[:8])
         )
     return "\n".join(lines)
+
+
+def register_setup_lock(setup, bot) -> None:
+    @setup.command(name="lock", description="対象カテゴリで、ボット以外のチャンネル作成を禁止します")
+    @app_commands.checks.has_permissions(manage_channels=True)
+    async def setup_lock(interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message("サーバー内でのみ使えます。", ephemeral=True)
+            return
+        settings = await bot.store.get_settings(interaction.guild.id)
+        category = None
+        if settings and settings["category_id"]:
+            found = interaction.guild.get_channel(settings["category_id"])
+            if isinstance(found, discord.CategoryChannel):
+                category = found
+        if category is None:
+            await interaction.response.send_message(
+                "先に `/setup category` でカテゴリを指定してください。",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        msg = await lock_category_creation(bot, category)
+        await interaction.followup.send(msg, ephemeral=True)
