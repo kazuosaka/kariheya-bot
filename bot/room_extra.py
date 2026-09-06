@@ -3,6 +3,7 @@ from __future__ import annotations
 import discord
 from discord import app_commands
 
+from envfile import configured_owner_guild_id
 from ui import describe_http_error, hub_channel_name, sanitize_name, sanitize_prefix
 
 
@@ -107,3 +108,120 @@ def register_setup_name(setup: app_commands.Group, bot) -> None:
             "すでに存在する一時部屋の名前は変わりません。",
             ephemeral=True,
         )
+
+
+def _parse_guild_id(raw: str) -> int | None:
+    cleaned = raw.strip()
+    if not cleaned.isdigit() or not (17 <= len(cleaned) <= 20):
+        return None
+    return int(cleaned)
+
+
+def attach_bind(group: app_commands.Group, bot) -> None:
+    @group.command(name="bind", description="運用者コマンドをこのサーバーに固定します（未設定時のみ）")
+    async def owner_bind(interaction: discord.Interaction) -> None:
+        if not await bot.is_owner_user(interaction.user.id):
+            await interaction.response.send_message("この操作はボット運用者だけができます。", ephemeral=True)
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("サーバー内でのみ使えます。", ephemeral=True)
+            return
+        current = configured_owner_guild_id()
+        if current:
+            await interaction.response.send_message(
+                f"すでに `{current}` に固定されています。\n"
+                "変更する場合は `.env` の `OWNER_GUILD_ID` を直接書き換えて、ボットを再起動してください。",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await bot.lock_owner_guild(interaction.guild)
+        except OSError:
+            await interaction.followup.send(
+                "`.env` に書き込めませんでした。docker-compose で `.env` がコンテナにマウントされているか確認してください。",
+                ephemeral=True,
+            )
+            return
+        await interaction.followup.send(
+            f"このサーバー（`{interaction.guild.id}`）を運用サーバーに固定し、`.env` へ書き込みました。\n"
+            "`/owner block` などはここでのみ使えます。変更は `.env` の直接編集だけです。",
+            ephemeral=True,
+        )
+
+
+def register_silence(group: app_commands.Group, bot) -> None:
+    attach_bind(group, bot)
+    @group.command(name="block", description="指定サーバーでボットを無応答にします（運用者専用）")
+    @app_commands.describe(guild_id="停止するサーバーID")
+    async def setup_block(interaction: discord.Interaction, guild_id: str) -> None:
+        if not await bot.is_owner_user(interaction.user.id):
+            await interaction.response.send_message("この操作はボット運用者だけができます。", ephemeral=True)
+            return
+        parsed = _parse_guild_id(guild_id)
+        if parsed is None:
+            await interaction.response.send_message("サーバーIDが正しくありません。数字のIDを指定してください。", ephemeral=True)
+            return
+        if interaction.guild is not None and parsed == interaction.guild.id:
+            await interaction.response.send_message(
+                "今いるサーバーは停止できません。停止すると、ここから解除できなくなります。",
+                ephemeral=True,
+            )
+            return
+        await bot.store.disable_guild(parsed)
+        for row in await bot.store.list_rooms(parsed):
+            bot.cancel_delete(int(row["voice_id"]))
+        found = bot.get_guild(parsed)
+        label = f"{found.name} (`{parsed}`)" if found is not None else f"`{parsed}`"
+        await interaction.response.send_message(
+            f"{label} を停止しました。そのサーバーでは応答しません。",
+            ephemeral=True,
+        )
+
+    @group.command(name="unblock", description="停止したサーバーを再開します（運用者専用）")
+    @app_commands.describe(guild_id="再開するサーバーID")
+    async def setup_unblock(interaction: discord.Interaction, guild_id: str) -> None:
+        if not await bot.is_owner_user(interaction.user.id):
+            await interaction.response.send_message("この操作はボット運用者だけができます。", ephemeral=True)
+            return
+        parsed = _parse_guild_id(guild_id)
+        if parsed is None:
+            await interaction.response.send_message("サーバーIDが正しくありません。数字のIDを指定してください。", ephemeral=True)
+            return
+        await bot.store.enable_guild(parsed)
+        found = bot.get_guild(parsed)
+        label = f"{found.name} (`{parsed}`)" if found is not None else f"`{parsed}`"
+        await interaction.response.send_message(f"{label} を再開しました。", ephemeral=True)
+
+    @group.command(name="blocked", description="停止中のサーバー一覧（運用者専用）")
+    async def setup_blocked(interaction: discord.Interaction) -> None:
+        if not await bot.is_owner_user(interaction.user.id):
+            await interaction.response.send_message("この操作はボット運用者だけができます。", ephemeral=True)
+            return
+        ids = await bot.store.list_disabled_guilds()
+        if not ids:
+            await interaction.response.send_message("停止中のサーバーはありません。", ephemeral=True)
+            return
+        lines = []
+        for gid in ids:
+            found = bot.get_guild(gid)
+            lines.append(f"- {found.name} (`{gid}`)" if found is not None else f"- `{gid}`")
+        await interaction.response.send_message("停止中:\n" + "\n".join(lines), ephemeral=True)
+
+    @group.command(name="servers", description="ボットが入っているサーバー一覧（運用者専用）")
+    async def setup_servers(interaction: discord.Interaction) -> None:
+        if not await bot.is_owner_user(interaction.user.id):
+            await interaction.response.send_message("この操作はボット運用者だけができます。", ephemeral=True)
+            return
+        silenced = set(await bot.store.list_disabled_guilds())
+        lines = []
+        for guild in bot.guilds:
+            mark = " 停止中" if guild.id in silenced else ""
+            lines.append(f"- {guild.name} (`{guild.id}`){mark}")
+        if not lines:
+            await interaction.response.send_message("参加中のサーバーはありません。", ephemeral=True)
+            return
+        text = "参加中のサーバー:\n" + "\n".join(lines)
+        if len(text) > 1800:
+            text = text[:1800] + "\n…"
+        await interaction.response.send_message(text, ephemeral=True)
