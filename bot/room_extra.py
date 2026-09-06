@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+import discord
+from discord import app_commands
+
+from ui import describe_http_error, sanitize_name
+
+
+def register_rename(room: app_commands.Group, bot) -> None:
+    @room.command(name="rename", description="自分が作った一時部屋の名前を変えます")
+    @app_commands.describe(name="新しい部屋名")
+    async def room_rename(interaction: discord.Interaction, name: str) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message("サーバー内でのみ使えます。", ephemeral=True)
+            return
+        room_name = sanitize_name(name)
+        if not room_name:
+            await interaction.response.send_message("有効な部屋名を入力してください。", ephemeral=True)
+            return
+
+        row = await bot.store.get_room_by_owner(interaction.guild.id, interaction.user.id)
+        if row is None and interaction.user.guild_permissions.manage_channels:
+            current = interaction.user.voice.channel if interaction.user.voice else None
+            if isinstance(current, discord.VoiceChannel):
+                row = await bot.store.get_room_by_voice(current.id)
+        if row is None:
+            await interaction.response.send_message(
+                "名前を変えられる一時部屋がありません。先に部屋を作ってください。",
+                ephemeral=True,
+            )
+            return
+
+        voice = interaction.guild.get_channel(row["voice_id"])
+        text = interaction.guild.get_channel(row["text_id"])
+        if not isinstance(voice, discord.VoiceChannel):
+            await bot.store.delete_room(row["voice_id"])
+            await interaction.response.send_message("部屋が見つかりませんでした。", ephemeral=True)
+            return
+        text_same = not isinstance(text, discord.TextChannel) or text.name == room_name
+        if voice.name == room_name and text_same:
+            await interaction.response.send_message("同じ名前です。", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await voice.edit(name=room_name, reason=f"{interaction.user} が部屋名を変更")
+        except discord.HTTPException as exc:
+            await interaction.followup.send(
+                f"ボイスの名前を変えられませんでした。\n{describe_http_error(exc)}",
+                ephemeral=True,
+            )
+            return
+        if isinstance(text, discord.TextChannel):
+            try:
+                await text.edit(
+                    name=room_name,
+                    topic=f"「{room_name}」の専用チャット。カテゴリの権限を持つメンバーが使えます。",
+                    reason=f"{interaction.user} が部屋名を変更",
+                )
+            except discord.HTTPException as exc:
+                await interaction.followup.send(
+                    f"ボイスは {voice.mention} に変えました。テキストの名前変更に失敗しました。\n"
+                    f"{describe_http_error(exc)}",
+                    ephemeral=True,
+                )
+                return
+        await interaction.followup.send(f"部屋名を **{room_name}** にしました。", ephemeral=True)
