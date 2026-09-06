@@ -3,7 +3,7 @@ from __future__ import annotations
 import discord
 from discord import app_commands
 
-from ui import describe_http_error, sanitize_name
+from ui import describe_http_error, sanitize_name, sanitize_prefix
 
 
 def register_rename(room: app_commands.Group, bot) -> None:
@@ -65,3 +65,26 @@ def register_rename(room: app_commands.Group, bot) -> None:
                 )
                 return
         await interaction.followup.send(f"部屋名を **{room_name}** にしました。", ephemeral=True)
+
+
+def register_setup_name(setup: app_commands.Group, bot) -> None:
+    @setup.command(name="name", description="新しく作る部屋のデフォルト名を変えます")
+    @app_commands.describe(prefix="部屋名の先頭。後ろに _1, _2 と番号が付きます")
+    @app_commands.checks.has_permissions(manage_channels=True)
+    async def setup_name(interaction: discord.Interaction, prefix: str) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message("サーバー内でのみ使えます。", ephemeral=True)
+            return
+        cleaned = sanitize_prefix(prefix)
+        if not cleaned:
+            await interaction.response.send_message(
+                "有効な名前を入力してください。`#` `,` `:` は使えません。",
+                ephemeral=True,
+            )
+            return
+        await bot.store.upsert_room_prefix(interaction.guild.id, cleaned)
+        await interaction.response.send_message(
+            f"これから作る部屋は **{cleaned}_1**、**{cleaned}_2** … になります。\n"
+            "すでに存在する部屋の名前は変わりません。",
+            ephemeral=True,
+        )
