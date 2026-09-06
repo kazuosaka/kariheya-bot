@@ -22,12 +22,12 @@ room = app_commands.Group(name="room", description="一時ボイス部屋")
 owner = app_commands.Group(
     name="owner",
     description="ボット運用者専用",
-    default_permissions=discord.Permissions.none(),
+    default_permissions=discord.Permissions(administrator=True),
 )
 owner_bind_only = app_commands.Group(
     name="owner",
     description="ボット運用者専用",
-    default_permissions=discord.Permissions.none(),
+    default_permissions=discord.Permissions(administrator=True),
 )
 
 
