@@ -15,7 +15,7 @@ from kariheya import (
     format_limit,
     hub_channel_name,
 )
-from room_extra import register_rename
+from room_extra import register_rename, register_setup_name
 
 setup = app_commands.Group(name="setup", description="仮部屋の管理者設定")
 room = app_commands.Group(name="room", description="一時ボイス部屋")
@@ -90,8 +90,10 @@ async def setup_show(interaction: discord.Interaction) -> None:
         label = format_limit(int(hub["user_limit"]))
         hub_bits.append(ch.mention if isinstance(ch, discord.VoiceChannel) else f"（欠落:{label}）")
     hub_text = " ".join(hub_bits) or "（未作成。`/setup hubs`）"
+    prefix = await bot.store.get_room_prefix(interaction.guild.id)
     await interaction.response.send_message(
         f"作成先カテゴリ: {cat_text}\n許可ロール: {role_text}\n"
+        f"部屋のデフォルト名: **{prefix}_n**\n"
         f"作成専用ハブ: {hub_text}\n稼働中の一時部屋: {len(rooms)}",
         ephemeral=True,
     )
@@ -133,6 +135,7 @@ async def setup_hub(
         )
         return
 
+    prefix = await bot.store.get_room_prefix(interaction.guild.id)
     limit = int(limit)
     row = await bot.store.get_hub_by_limit(interaction.guild.id, limit)
     channel = interaction.guild.get_channel(row["channel_id"]) if row else None
@@ -149,7 +152,7 @@ async def setup_hub(
         await interaction.response.defer(ephemeral=True)
         try:
             channel = await category.create_voice_channel(
-                name=hub_channel_name(limit),
+                name=hub_channel_name(limit, prefix),
                 user_limit=1,
                 reason="仮部屋作成ハブ",
             )
@@ -212,7 +215,7 @@ async def setup_hub(
         return
     await interaction.response.defer(ephemeral=True)
     try:
-        await channel.edit(name=hub_channel_name(new_limit), reason="仮部屋作成ハブの人数上限を変更")
+        await channel.edit(name=hub_channel_name(new_limit, prefix), reason="仮部屋作成ハブの人数上限を変更")
     except discord.HTTPException as exc:
         await interaction.followup.send(
             f"名前の変更に失敗しました。\n{describe_http_error(exc)}",
@@ -261,8 +264,9 @@ async def setup_hubs(interaction: discord.Interaction) -> None:
         )
         return
     created: list[str] = []
+    prefix = await bot.store.get_room_prefix(interaction.guild.id)
     for limit in DEFAULT_HUB_LIMITS:
-        name = hub_channel_name(limit)
+        name = hub_channel_name(limit, prefix)
         try:
             channel = await category.create_voice_channel(
                 name=name,
@@ -321,7 +325,7 @@ async def room_panel(interaction: discord.Interaction) -> None:
     embed = discord.Embed(
         title="一時通話を始める",
         description=(
-            "部屋を作るには、人数制限の付いた **＋ 仮部屋を作る** ボイスに入ってください。\n"
+            "部屋を作るには、人数制限の付いた **＋ 仮音声通話（4人）** などの作成用ボイスに入ってください。\n"
             "同じ名前のテキストも自動で作られます。1人1部屋までです。"
         ),
         color=0xC9893A,
@@ -348,6 +352,7 @@ async def on_app_error(
 
 
 register_rename(room, bot)
+register_setup_name(setup, bot)
 bot.tree.add_command(setup)
 bot.tree.add_command(room)
 
