@@ -368,13 +368,9 @@ register_setup_name(setup, bot)
 register_silence(owner, bot)
 attach_bind(owner_bind_only, bot)
 bot.owner_group = owner
+bot.owner_bind_only = owner_bind_only
 bot.tree.add_command(setup)
 bot.tree.add_command(room)
-_owner_guild = os.getenv("OWNER_GUILD_ID", "").strip()
-if _owner_guild:
-    bot.tree.add_command(owner, guild=discord.Object(id=int(_owner_guild)))
-else:
-    bot.tree.add_command(owner_bind_only)
 
 
 @bot.tree.interaction_check
