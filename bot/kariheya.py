@@ -53,23 +53,37 @@ class KariheyaBot(RoomLifecycleMixin, commands.Bot):
             synced = await self.tree.sync()
             log.info("synced %s global commands", len(synced))
 
+        try:
+            await self._sync_owner_commands(guild_id, owner_guild_id)
+        except Exception:
+            log.exception("owner command sync failed; bot will still start")
+        self.sweep_empty_rooms.start()
+
+    async def _sync_owner_commands(self, guild_id: str, owner_guild_id: str) -> None:
+        if self.tree.get_command("owner") is not None:
+            self.tree.remove_command("owner")
         if self.owner_group is not None and owner_guild_id:
             target = discord.Object(id=int(owner_guild_id))
+            if self.tree.get_command("owner", guild=target) is not None:
+                self.tree.remove_command("owner", guild=target)
             self.tree.add_command(self.owner_group, guild=target)
             extra = await self.tree.sync(guild=target)
             log.info("synced %s owner commands to guild %s", len(extra), owner_guild_id)
-        elif self.owner_bind_only is not None:
-            target_id = guild_id or None
-            if target_id:
-                target = discord.Object(id=int(target_id))
-                self.tree.add_command(self.owner_bind_only, guild=target)
-                extra = await self.tree.sync(guild=target)
-                log.info("synced %s bind command to guild %s", len(extra), target_id)
-            else:
-                self.tree.add_command(self.owner_bind_only)
-                extra = await self.tree.sync()
-                log.info("synced %s global bind commands", len(extra))
-        self.sweep_empty_rooms.start()
+            return
+        if self.owner_bind_only is None:
+            return
+        target_id = owner_guild_id or guild_id
+        if target_id:
+            target = discord.Object(id=int(target_id))
+            if self.tree.get_command("owner", guild=target) is not None:
+                self.tree.remove_command("owner", guild=target)
+            self.tree.add_command(self.owner_bind_only, guild=target)
+            extra = await self.tree.sync(guild=target)
+            log.info("synced %s bind command to guild %s", len(extra), target_id)
+            return
+        self.tree.add_command(self.owner_bind_only)
+        extra = await self.tree.sync()
+        log.info("synced %s global bind commands", len(extra))
 
     async def lock_owner_guild(self, guild: discord.Guild) -> Path:
         path = write_owner_guild_id(guild.id)
