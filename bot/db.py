@@ -50,6 +50,10 @@ class Database:
                 guild_id INTEGER NOT NULL,
                 user_limit INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS disabled_guilds (
+                guild_id INTEGER PRIMARY KEY
+            );
             """
         )
         cur = await self._db.execute("PRAGMA table_info(rooms)")
@@ -172,6 +176,32 @@ class Database:
     async def delete_hub(self, channel_id: int) -> None:
         await self.db.execute("DELETE FROM hubs WHERE channel_id = ?", (channel_id,))
         await self.db.commit()
+
+    async def is_guild_disabled(self, guild_id: int) -> bool:
+        cur = await self.db.execute(
+            "SELECT 1 FROM disabled_guilds WHERE guild_id = ?",
+            (guild_id,),
+        )
+        return await cur.fetchone() is not None
+
+    async def disable_guild(self, guild_id: int) -> None:
+        await self.db.execute(
+            "INSERT OR IGNORE INTO disabled_guilds (guild_id) VALUES (?)",
+            (guild_id,),
+        )
+        await self.db.commit()
+
+    async def enable_guild(self, guild_id: int) -> None:
+        await self.db.execute(
+            "DELETE FROM disabled_guilds WHERE guild_id = ?",
+            (guild_id,),
+        )
+        await self.db.commit()
+
+    async def list_disabled_guilds(self) -> list[int]:
+        cur = await self.db.execute("SELECT guild_id FROM disabled_guilds ORDER BY guild_id")
+        rows = await cur.fetchall()
+        return [int(row["guild_id"]) for row in rows]
 
     async def get_room_by_owner(self, guild_id: int, owner_id: int) -> aiosqlite.Row | None:
         cur = await self.db.execute(
