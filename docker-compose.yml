@@ -9,8 +9,10 @@ services:
       - .env
     environment:
       DATA_DIR: /app/data
+      ENV_FILE: /app/.env
     volumes:
       - kariheya-data:/app/data
+      - ./.env:/app/.env
 
 volumes:
   kariheya-data:
