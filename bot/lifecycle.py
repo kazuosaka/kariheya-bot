@@ -6,7 +6,7 @@ import time
 import discord
 from discord.ext import tasks
 
-from ui import GRACE_SECONDS, ROOM_NAME_PREFIX, WAIT_FIRST_JOIN_SECONDS, format_limit, human_members, log, next_room_number
+from ui import GRACE_SECONDS, WAIT_FIRST_JOIN_SECONDS, format_limit, human_members, log, next_room_number
 
 
 class RoomLifecycleMixin:
@@ -49,6 +49,7 @@ class RoomLifecycleMixin:
             return None
 
         limit = int(hub["user_limit"])
+        prefix = await self.store.get_room_prefix(guild.id)
         async with self._create_lock:
             still = await self.store.get_room_by_owner(guild.id, member.id)
             if still is not None:
@@ -59,7 +60,7 @@ class RoomLifecycleMixin:
                     except discord.HTTPException:
                         pass
                     return dest.id
-            room_name = f"{ROOM_NAME_PREFIX}_{next_room_number(category)}"
+            room_name = f"{prefix}_{next_room_number(category, prefix)}"
             voice = None
             text = None
             try:
