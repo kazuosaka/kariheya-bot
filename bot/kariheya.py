@@ -37,6 +37,7 @@ class KariheyaBot(RoomLifecycleMixin, commands.Bot):
         self._deletes: dict[int, asyncio.Task] = {}
         self._create_lock = asyncio.Lock()
         self.owner_group: app_commands.Group | None = None
+        self.owner_bind_only: app_commands.Group | None = None
 
     async def setup_hook(self) -> None:
         await self.store.connect()
@@ -51,22 +52,40 @@ class KariheyaBot(RoomLifecycleMixin, commands.Bot):
         else:
             synced = await self.tree.sync()
             log.info("synced %s global commands", len(synced))
-        if owner_guild_id and owner_guild_id != guild_id:
-            extra = await self.tree.sync(guild=discord.Object(id=int(owner_guild_id)))
+
+        if self.owner_group is not None and owner_guild_id:
+            target = discord.Object(id=int(owner_guild_id))
+            self.tree.add_command(self.owner_group, guild=target)
+            extra = await self.tree.sync(guild=target)
             log.info("synced %s owner commands to guild %s", len(extra), owner_guild_id)
+        elif self.owner_bind_only is not None:
+            target_id = guild_id or None
+            if target_id:
+                target = discord.Object(id=int(target_id))
+                self.tree.add_command(self.owner_bind_only, guild=target)
+                extra = await self.tree.sync(guild=target)
+                log.info("synced %s bind command to guild %s", len(extra), target_id)
+            else:
+                self.tree.add_command(self.owner_bind_only)
+                extra = await self.tree.sync()
+                log.info("synced %s global bind commands", len(extra))
         self.sweep_empty_rooms.start()
 
     async def lock_owner_guild(self, guild: discord.Guild) -> Path:
         path = write_owner_guild_id(guild.id)
         if self.owner_group is None:
             return path
-        existing = self.tree.get_command("owner")
-        if existing is not None:
-            self.tree.remove_command("owner")
-        self.tree.add_command(self.owner_group, guild=guild)
-        await self.tree.sync()
-        await self.tree.sync(guild=guild)
-        log.info("locked owner commands to guild %s (%s)", guild.id, guild.name)
+        try:
+            if self.tree.get_command("owner") is not None:
+                self.tree.remove_command("owner")
+            if self.tree.get_command("owner", guild=guild) is not None:
+                self.tree.remove_command("owner", guild=guild)
+            self.tree.add_command(self.owner_group, guild=discord.Object(id=guild.id))
+            await self.tree.sync()
+            await self.tree.sync(guild=guild)
+            log.info("locked owner commands to guild %s (%s)", guild.id, guild.name)
+        except Exception:
+            log.exception("owner command resync after bind failed; bind itself is saved")
         return path
 
     async def is_owner_user(self, user_id: int) -> bool:
