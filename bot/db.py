@@ -26,7 +26,7 @@ class Database:
             CREATE TABLE IF NOT EXISTS guild_settings (
                 guild_id INTEGER PRIMARY KEY,
                 category_id INTEGER,
-                grace_seconds INTEGER NOT NULL DEFAULT 20
+                grace_seconds INTEGER NOT NULL DEFAULT 5
             );
 
             CREATE TABLE IF NOT EXISTS allowed_roles (
@@ -68,6 +68,21 @@ class Database:
             await self._db.execute(
                 "ALTER TABLE guild_settings ADD COLUMN room_prefix TEXT NOT NULL DEFAULT '仮音声通話'"
             )
+        if "hub_prefix" not in gcols:
+            await self._db.execute(
+                "ALTER TABLE guild_settings ADD COLUMN hub_prefix TEXT NOT NULL DEFAULT '新しく音声通話を始める'"
+            )
+        if "announce_enabled" not in gcols:
+            await self._db.execute(
+                "ALTER TABLE guild_settings ADD COLUMN announce_enabled INTEGER NOT NULL DEFAULT 1"
+            )
+        cur = await self._db.execute("PRAGMA user_version")
+        schema_ver = int((await cur.fetchone())[0])
+        if schema_ver < 1:
+            await self._db.execute(
+                "UPDATE guild_settings SET grace_seconds = 5 WHERE grace_seconds = 20"
+            )
+            await self._db.execute("PRAGMA user_version = 1")
         await self._db.commit()
 
     @property
@@ -83,7 +98,7 @@ class Database:
 
     async def get_settings(self, guild_id: int) -> aiosqlite.Row | None:
         cur = await self.db.execute(
-            "SELECT guild_id, category_id, grace_seconds, room_prefix FROM guild_settings WHERE guild_id = ?",
+            "SELECT guild_id, category_id, grace_seconds, room_prefix, hub_prefix, announce_enabled FROM guild_settings WHERE guild_id = ?",
             (guild_id,),
         )
         return await cur.fetchone()
@@ -103,6 +118,70 @@ class Database:
             ON CONFLICT(guild_id) DO UPDATE SET room_prefix = excluded.room_prefix
             """,
             (guild_id, prefix),
+        )
+        await self.db.commit()
+
+    async def get_hub_prefix(self, guild_id: int) -> str:
+        settings = await self.get_settings(guild_id)
+        if settings is None:
+            return "新しく音声通話を始める"
+        try:
+            prefix = str(settings["hub_prefix"] or "").strip()
+        except (KeyError, IndexError):
+            prefix = ""
+        return prefix or "新しく音声通話を始める"
+
+    async def upsert_hub_prefix(self, guild_id: int, prefix: str) -> None:
+        await self.db.execute(
+            """
+            INSERT INTO guild_settings (guild_id, hub_prefix)
+            VALUES (?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET hub_prefix = excluded.hub_prefix
+            """,
+            (guild_id, prefix),
+        )
+        await self.db.commit()
+
+    async def get_grace_seconds(self, guild_id: int) -> int:
+        settings = await self.get_settings(guild_id)
+        if settings is None:
+            return 5
+        try:
+            value = int(settings["grace_seconds"])
+        except (KeyError, IndexError, TypeError, ValueError):
+            return 5
+        return max(3, min(120, value))
+
+    async def upsert_grace_seconds(self, guild_id: int, seconds: int) -> None:
+        seconds = max(3, min(120, int(seconds)))
+        await self.db.execute(
+            """
+            INSERT INTO guild_settings (guild_id, grace_seconds)
+            VALUES (?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET grace_seconds = excluded.grace_seconds
+            """,
+            (guild_id, seconds),
+        )
+        await self.db.commit()
+
+    async def get_announce_enabled(self, guild_id: int) -> bool:
+        settings = await self.get_settings(guild_id)
+        if settings is None:
+            return True
+        try:
+            return int(settings["announce_enabled"]) != 0
+        except (KeyError, IndexError, TypeError, ValueError):
+            return True
+
+    async def upsert_announce_enabled(self, guild_id: int, enabled: bool) -> None:
+        flag = 1 if enabled else 0
+        await self.db.execute(
+            """
+            INSERT INTO guild_settings (guild_id, announce_enabled)
+            VALUES (?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET announce_enabled = excluded.announce_enabled
+            """,
+            (guild_id, flag),
         )
         await self.db.commit()
 
