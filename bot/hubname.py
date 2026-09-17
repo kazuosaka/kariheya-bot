@@ -4,6 +4,7 @@ import discord
 from discord import app_commands
 
 from ui import HUB_NAME_PREFIX, describe_http_error, hub_channel_name, sanitize_prefix
+from secret import is_secret_row
 
 
 async def apply_hub_names(bot, guild: discord.Guild, prefix: str) -> str | None:
@@ -12,7 +13,7 @@ async def apply_hub_names(bot, guild: discord.Guild, prefix: str) -> str | None:
         channel = guild.get_channel(hub["channel_id"])
         if not isinstance(channel, discord.VoiceChannel):
             continue
-        new_name = hub_channel_name(int(hub["user_limit"]), prefix)
+        new_name = hub_channel_name(int(hub["user_limit"]), prefix, secret=is_secret_row(hub))
         if channel.name == new_name:
             continue
         try:
