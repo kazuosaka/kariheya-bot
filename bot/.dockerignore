@@ -1,0 +1,5 @@
+__pycache__
+*.pyc
+*.pyo
+apply_secret.py
+fix_db_indent.py
