@@ -121,3 +121,30 @@ def repair_db_secret_block(text: str) -> str:
     updated = "".join(lines)
     must_compile(updated, "db.py")
     return updated
+
+
+def main() -> int:
+    path = ROOT / "db.py"
+    if not path.is_file():
+        print("PATCH FAILED: db.py not found")
+        return 1
+    original, newline = read_py(path)
+    backup = original
+    try:
+        updated = repair_db_secret_block(original)
+        must_compile(updated, "db.py")
+        if updated != original:
+            write_py(path, updated, newline)
+            print("updated db.py")
+        else:
+            print("unchanged db.py")
+        print("PATCH OK")
+        return 0
+    except PatchError as exc:
+        path.write_bytes(encode_py(backup, newline))
+        print(f"PATCH FAILED: {exc}")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
