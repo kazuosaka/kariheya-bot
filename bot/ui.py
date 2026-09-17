@@ -21,7 +21,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("kariheya")
 
-GRACE_SECONDS = 20
+GRACE_SECONDS = 5
 WAIT_FIRST_JOIN_SECONDS = 300
 MAX_LIMIT = 99
 ROOM_NAME_PREFIX = "仮音声通話"
@@ -59,9 +59,10 @@ def format_limit(limit: int) -> str:
     return "制限なし" if limit <= 0 else f"{limit}人"
 
 
-def hub_channel_name(limit: int, prefix: str | None = None) -> str:
+def hub_channel_name(limit: int, prefix: str | None = None, secret: bool = False) -> str:
     name = (prefix or HUB_NAME_PREFIX).strip() or HUB_NAME_PREFIX
-    suffix = f"（{format_limit(limit)}）"
+    kind = f"秘密・{format_limit(limit)}" if secret else format_limit(limit)
+    suffix = f"（{kind}）"
     keep = 100 - len(suffix)
     if keep < 1:
         return suffix[:100]
