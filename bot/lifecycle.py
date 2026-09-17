@@ -6,7 +6,9 @@ import time
 import discord
 from discord.ext import tasks
 
-from ui import GRACE_SECONDS, WAIT_FIRST_JOIN_SECONDS, format_limit, human_members, log, next_room_number
+from announce import post_room_announce
+from secret import apply_secret_text_access, is_secret_row, secret_text_overwrites
+from ui import WAIT_FIRST_JOIN_SECONDS, human_members, log, next_room_number
 
 
 class RoomLifecycleMixin:
@@ -15,10 +17,12 @@ class RoomLifecycleMixin:
         hub = await self.store.get_hub(hub_channel_id)
         if hub is None:
             return None
+        if await self.store.is_guild_disabled(guild.id):
+            return None
         allowed = await self.store.list_roles(guild.id)
         if not self.can_create(member, allowed):
             try:
-                await member.move_to(None, reason="部屋作成が許可されていないため切断")
+                await member.move_to(None, reason="部屋作成が許可されていないため分断")
             except discord.HTTPException:
                 pass
             return None
@@ -49,6 +53,7 @@ class RoomLifecycleMixin:
             return None
 
         limit = int(hub["user_limit"])
+        secret = is_secret_row(hub)
         prefix = await self.store.get_room_prefix(guild.id)
         async with self._create_lock:
             still = await self.store.get_room_by_owner(guild.id, member.id)
@@ -69,11 +74,16 @@ class RoomLifecycleMixin:
                     user_limit=limit,
                     reason=f"{member} がハブから一時ボイスを作成",
                 )
-                text = await category.create_text_channel(
-                    name=room_name,
-                    topic=f"「{room_name}」の専用チャット。カテゴリの権限を持つメンバーが使えます。",
-                    reason=f"{member} がハブから一時テキストを作成",
-                )
+                text_kwargs: dict = {
+                    "name": room_name,
+                    "reason": f"{member} がハブから一時テキストを作成",
+                }
+                if secret:
+                    text_kwargs["topic"] = f"「{room_name}」の秘密チャット。通話中のメンバーだけが読めます。"
+                    text_kwargs["overwrites"] = secret_text_overwrites(guild, [])
+                else:
+                    text_kwargs["topic"] = f"「{room_name}」の専用チャット。カテゴリの権限を持つメンバーが使えます。"
+                text = await category.create_text_channel(**text_kwargs)
             except discord.HTTPException:
                 log.exception("hub create failed")
                 if voice is not None:
@@ -82,7 +92,7 @@ class RoomLifecycleMixin:
                     except discord.HTTPException:
                         pass
                 try:
-                    await member.move_to(None, reason="部屋作成に失敗したため切断")
+                    await member.move_to(None, reason="部屋作成に失敗したため分断")
                 except discord.HTTPException:
                     pass
                 return None
@@ -93,27 +103,15 @@ class RoomLifecycleMixin:
                 owner_id=member.id,
                 user_limit=limit,
                 created_at=int(time.time()),
+                secret=secret,
             )
         try:
             await member.move_to(voice, reason="作成した一時ボイスへ移動")
             await self.store.mark_occupied(voice.id)
         except discord.HTTPException:
             log.warning("could not move %s into new room", member.id)
-        try:
-            await text.send(
-                content=f"{member.mention} がこの部屋を作りました。カテゴリの権限を持つメンバーはテキストを閲覧・投稿できます。",
-                embed=discord.Embed(
-                    title=room_name,
-                    description=(
-                        f"人数上限: **{format_limit(limit)}**\n"
-                        f"ボイス: {voice.mention}\n"
-                        "全員がボイスを出ると、ボイスとテキストの両方を削除します。"
-                    ),
-                    color=0xC9893A,
-                ),
-            )
-        except discord.HTTPException:
-            pass
+        await self.sync_text_access(voice, text)
+        await post_room_announce(self, guild.id, member, text, voice, room_name, limit)
         return voice.id
 
     async def sync_text_access(
@@ -121,7 +119,16 @@ class RoomLifecycleMixin:
         voice: discord.VoiceChannel,
         text: discord.TextChannel,
     ) -> None:
-        return
+        row = await self.store.get_room_by_voice(voice.id)
+        if row is None or not is_secret_row(row):
+            return
+        locks = getattr(self, "_sync_locks", None)
+        if locks is None:
+            locks = {}
+            self._sync_locks = locks  # type: ignore[attr-defined]
+        lock = locks.setdefault(voice.id, asyncio.Lock())
+        async with lock:
+            await apply_secret_text_access(text, voice)
 
     def _should_delete_empty(self, row: object) -> bool:
         occupied = 0
@@ -147,7 +154,11 @@ class RoomLifecycleMixin:
 
     async def _delete_when_still_empty(self, voice_id: int) -> None:
         try:
-            await asyncio.sleep(GRACE_SECONDS)
+            row = await self.store.get_room_by_voice(voice_id)
+            if row is None:
+                return
+            grace = await self.store.get_grace_seconds(int(row["guild_id"]))
+            await asyncio.sleep(grace)
             row = await self.store.get_room_by_voice(voice_id)
             if row is None:
                 return
@@ -192,6 +203,8 @@ class RoomLifecycleMixin:
     ) -> None:
         if member.bot:
             return
+        if await self.store.is_guild_disabled(member.guild.id):
+            return
         before_id = before.channel.id if isinstance(before.channel, discord.VoiceChannel) else None
         after_id = after.channel.id if isinstance(after.channel, discord.VoiceChannel) else None
         if before_id == after_id:
@@ -228,6 +241,8 @@ class RoomLifecycleMixin:
                     await self.store.delete_room(before_id)
 
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
+        if await self.store.is_guild_disabled(channel.guild.id):
+            return
         if isinstance(channel, discord.VoiceChannel):
             row = await self.store.get_room_by_voice(channel.id)
             if row is not None:
@@ -249,6 +264,8 @@ class RoomLifecycleMixin:
     @tasks.loop(seconds=60)
     async def sweep_empty_rooms(self) -> None:
         for row in await self.store.list_rooms():
+            if await self.store.is_guild_disabled(row["guild_id"]):
+                continue
             guild = self.get_guild(row["guild_id"])
             if guild is None:
                 continue
