@@ -48,7 +48,8 @@ class Database:
             CREATE TABLE IF NOT EXISTS hubs (
                 channel_id INTEGER PRIMARY KEY,
                 guild_id INTEGER NOT NULL,
-                user_limit INTEGER NOT NULL
+                user_limit INTEGER NOT NULL,
+                secret INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS disabled_guilds (
@@ -66,15 +67,27 @@ class Database:
         gcols = {row[1] for row in await cur.fetchall()}
         if "room_prefix" not in gcols:
             await self._db.execute(
-                "ALTER TABLE guild_settings ADD COLUMN room_prefix TEXT NOT NULL DEFAULT '仮音声通話'"
+                "ALTER TABLE guild_settings ADD COLUMN room_prefix TEXT NOT NULL DEFAULT '\u4eee\u97f3\u58f0\u901a\u8a71'"
             )
         if "hub_prefix" not in gcols:
             await self._db.execute(
-                "ALTER TABLE guild_settings ADD COLUMN hub_prefix TEXT NOT NULL DEFAULT '新しく音声通話を始める'"
+                "ALTER TABLE guild_settings ADD COLUMN hub_prefix TEXT NOT NULL DEFAULT '\u65b0\u3057\u304f\u97f3\u58f0\u901a\u8a71\u3092\u59cb\u3081\u308b'"
             )
         if "announce_enabled" not in gcols:
             await self._db.execute(
                 "ALTER TABLE guild_settings ADD COLUMN announce_enabled INTEGER NOT NULL DEFAULT 1"
+            )
+        cur = await self._db.execute("PRAGMA table_info(hubs)")
+        hcols = {row[1] for row in await cur.fetchall()}
+        if "secret" not in hcols:
+            await self._db.execute(
+                "ALTER TABLE hubs ADD COLUMN secret INTEGER NOT NULL DEFAULT 0"
+            )
+        cur = await self._db.execute("PRAGMA table_info(rooms)")
+        rcols = {row[1] for row in await cur.fetchall()}
+        if "secret" not in rcols:
+            await self._db.execute(
+                "ALTER TABLE rooms ADD COLUMN secret INTEGER NOT NULL DEFAULT 0"
             )
         cur = await self._db.execute("PRAGMA user_version")
         schema_ver = int((await cur.fetchone())[0])
@@ -106,9 +119,9 @@ class Database:
     async def get_room_prefix(self, guild_id: int) -> str:
         settings = await self.get_settings(guild_id)
         if settings is None:
-            return "仮音声通話"
+            return "\u4eee\u97f3\u58f0\u901a\u8a71"
         prefix = str(settings["room_prefix"] or "").strip()
-        return prefix or "仮音声通話"
+        return prefix or "\u4eee\u97f3\u58f0\u901a\u8a71"
 
     async def upsert_room_prefix(self, guild_id: int, prefix: str) -> None:
         await self.db.execute(
@@ -124,12 +137,12 @@ class Database:
     async def get_hub_prefix(self, guild_id: int) -> str:
         settings = await self.get_settings(guild_id)
         if settings is None:
-            return "新しく音声通話を始める"
+            return "\u65b0\u3057\u304f\u97f3\u58f0\u901a\u8a71\u3092\u59cb\u3081\u308b"
         try:
             prefix = str(settings["hub_prefix"] or "").strip()
         except (KeyError, IndexError):
             prefix = ""
-        return prefix or "新しく音声通話を始める"
+        return prefix or "\u65b0\u3057\u304f\u97f3\u58f0\u901a\u8a71\u3092\u59cb\u3081\u308b"
 
     async def upsert_hub_prefix(self, guild_id: int, prefix: str) -> None:
         await self.db.execute(
@@ -218,36 +231,49 @@ class Database:
         rows = await cur.fetchall()
         return [int(row["role_id"]) for row in rows]
 
-    async def upsert_hub(self, channel_id: int, guild_id: int, user_limit: int) -> None:
+    async def upsert_hub(
+        self,
+        channel_id: int,
+        guild_id: int,
+        user_limit: int,
+        secret: bool = False,
+    ) -> None:
+        flag = 1 if secret else 0
         await self.db.execute(
             """
-            INSERT INTO hubs (channel_id, guild_id, user_limit)
-            VALUES (?, ?, ?)
+            INSERT INTO hubs (channel_id, guild_id, user_limit, secret)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(channel_id) DO UPDATE SET
                 guild_id = excluded.guild_id,
-                user_limit = excluded.user_limit
+                user_limit = excluded.user_limit,
+                secret = excluded.secret
             """,
-            (channel_id, guild_id, user_limit),
+            (channel_id, guild_id, user_limit, flag),
         )
         await self.db.commit()
 
     async def get_hub(self, channel_id: int) -> aiosqlite.Row | None:
         cur = await self.db.execute(
-            "SELECT channel_id, guild_id, user_limit FROM hubs WHERE channel_id = ?",
+            "SELECT channel_id, guild_id, user_limit, secret FROM hubs WHERE channel_id = ?",
             (channel_id,),
         )
         return await cur.fetchone()
 
-    async def get_hub_by_limit(self, guild_id: int, user_limit: int) -> aiosqlite.Row | None:
+    async def get_hub_by_limit(
+        self,
+        guild_id: int,
+        user_limit: int,
+        secret: bool = False,
+    ) -> aiosqlite.Row | None:
         cur = await self.db.execute(
-            "SELECT channel_id, guild_id, user_limit FROM hubs WHERE guild_id = ? AND user_limit = ?",
-            (guild_id, user_limit),
+            "SELECT channel_id, guild_id, user_limit, secret FROM hubs WHERE guild_id = ? AND user_limit = ? AND secret = ?",
+            (guild_id, user_limit, 1 if secret else 0),
         )
         return await cur.fetchone()
 
     async def list_hubs(self, guild_id: int) -> list[aiosqlite.Row]:
         cur = await self.db.execute(
-            "SELECT channel_id, guild_id, user_limit FROM hubs WHERE guild_id = ? ORDER BY user_limit",
+            "SELECT channel_id, guild_id, user_limit, secret FROM hubs WHERE guild_id = ? ORDER BY secret, user_limit",
             (guild_id,),
         )
         return await cur.fetchall()
@@ -298,13 +324,14 @@ class Database:
         owner_id: int,
         user_limit: int,
         created_at: int,
+        secret: bool = False,
     ) -> None:
         await self.db.execute(
             """
-            INSERT INTO rooms (voice_id, text_id, guild_id, owner_id, user_limit, created_at, occupied)
-            VALUES (?, ?, ?, ?, ?, ?, 0)
+            INSERT INTO rooms (voice_id, text_id, guild_id, owner_id, user_limit, created_at, occupied, secret)
+            VALUES (?, ?, ?, ?, ?, ?, 0, ?)
             """,
-            (voice_id, text_id, guild_id, owner_id, user_limit, created_at),
+            (voice_id, text_id, guild_id, owner_id, user_limit, created_at, 1 if secret else 0),
         )
         await self.db.commit()
 
