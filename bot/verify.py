@@ -138,7 +138,7 @@ def check_contracts() -> None:
 
 def check_imports() -> None:
     sys.path.insert(0, str(ROOT))
-    modules = [
+    required = [
         "db",
         "ui",
         "secret",
@@ -149,9 +149,20 @@ def check_imports() -> None:
         "grace",
         "envfile",
         "room_extra",
-        "category_lock",
     ]
-    for name in modules:
+    optional = ["category_lock"]
+    for name in required:
+        if not (ROOT / f"{name}.py").is_file():
+            fail(f"missing module file: {name}.py")
+            return
+        try:
+            importlib.import_module(name)
+        except Exception as exc:
+            fail(f"import {name}: {type(exc).__name__}: {exc}")
+            return
+    for name in optional:
+        if not (ROOT / f"{name}.py").is_file():
+            continue
         try:
             importlib.import_module(name)
         except Exception as exc:
