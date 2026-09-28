@@ -4,7 +4,7 @@ import discord
 from discord import app_commands
 
 from envfile import configured_owner_guild_id
-from ui import describe_http_error, hub_channel_name, sanitize_name, sanitize_prefix
+from ui import describe_http_error, sanitize_name, sanitize_prefix
 
 
 def register_rename(room: app_commands.Group, bot) -> None:
@@ -85,26 +85,9 @@ def register_setup_name(setup: app_commands.Group, bot) -> None:
             return
         await interaction.response.defer(ephemeral=True)
         await bot.store.upsert_room_prefix(interaction.guild.id, cleaned)
-        hubs = await bot.store.list_hubs(interaction.guild.id)
-        for hub in hubs:
-            channel = interaction.guild.get_channel(hub["channel_id"])
-            if not isinstance(channel, discord.VoiceChannel):
-                continue
-            new_name = hub_channel_name(int(hub["user_limit"]), cleaned)
-            if channel.name == new_name:
-                continue
-            try:
-                await channel.edit(name=new_name, reason="部屋のデフォルト名に合わせて作成用ボイス名を変更")
-            except discord.HTTPException as exc:
-                await interaction.followup.send(
-                    f"部屋名は **{cleaned}** にしましたが、作成用ボイスの名前変更に失敗しました。\n"
-                    f"{describe_http_error(exc)}",
-                    ephemeral=True,
-                )
-                return
         await interaction.followup.send(
             f"これから作る部屋は **{cleaned}_1**、**{cleaned}_2** … になります。\n"
-            f"作成用ボイスの名前も **＋ {cleaned}（人数）** に合わせました。\n"
+            "作成用ボイスの名前は変わりません。変える場合は `/setup hubname` です。\n"
             "すでに存在する一時部屋の名前は変わりません。",
             ephemeral=True,
         )

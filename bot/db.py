@@ -71,7 +71,7 @@ class Database:
             )
         if "hub_prefix" not in gcols:
             await self._db.execute(
-                "ALTER TABLE guild_settings ADD COLUMN hub_prefix TEXT NOT NULL DEFAULT '\u65b0\u3057\u304f\u97f3\u58f0\u901a\u8a71\u3092\u59cb\u3081\u308b'"
+                "ALTER TABLE guild_settings ADD COLUMN hub_prefix TEXT NOT NULL DEFAULT '\u901a\u8a71\u3092\u59cb\u3081\u308b'"
             )
         if "announce_enabled" not in gcols:
             await self._db.execute(
@@ -137,12 +137,12 @@ class Database:
     async def get_hub_prefix(self, guild_id: int) -> str:
         settings = await self.get_settings(guild_id)
         if settings is None:
-            return "\u65b0\u3057\u304f\u97f3\u58f0\u901a\u8a71\u3092\u59cb\u3081\u308b"
+            return "\u901a\u8a71\u3092\u59cb\u3081\u308b"
         try:
             prefix = str(settings["hub_prefix"] or "").strip()
         except (KeyError, IndexError):
             prefix = ""
-        return prefix or "\u65b0\u3057\u304f\u97f3\u58f0\u901a\u8a71\u3092\u59cb\u3081\u308b"
+        return prefix or "\u901a\u8a71\u3092\u59cb\u3081\u308b"
 
     async def upsert_hub_prefix(self, guild_id: int, prefix: str) -> None:
         await self.db.execute(

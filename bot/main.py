@@ -16,6 +16,7 @@ from kariheya import (
     hub_channel_name,
 )
 from room_extra import attach_bind, register_rename, register_setup_name, register_silence
+from hubname import register_setup_hubname
 
 setup = app_commands.Group(name="setup", description="仮部屋の管理者設定")
 room = app_commands.Group(name="room", description="一時ボイス部屋")
@@ -145,7 +146,7 @@ async def setup_hub(
         )
         return
 
-    prefix = await bot.store.get_room_prefix(interaction.guild.id)
+    prefix = await bot.store.get_hub_prefix(interaction.guild.id)
     limit = int(limit)
     row = await bot.store.get_hub_by_limit(interaction.guild.id, limit)
     channel = interaction.guild.get_channel(row["channel_id"]) if row else None
@@ -274,7 +275,7 @@ async def setup_hubs(interaction: discord.Interaction) -> None:
         )
         return
     created: list[str] = []
-    prefix = await bot.store.get_room_prefix(interaction.guild.id)
+    prefix = await bot.store.get_hub_prefix(interaction.guild.id)
     for limit in DEFAULT_HUB_LIMITS:
         name = hub_channel_name(limit, prefix)
         try:
@@ -335,7 +336,7 @@ async def room_panel(interaction: discord.Interaction) -> None:
     embed = discord.Embed(
         title="一時通話を始める",
         description=(
-            "部屋を作るには、人数制限の付いた **＋ 仮音声通話（4人）** などの作成用ボイスに入ってください。\n"
+            "部屋を作るには、人数制限の付いた **通話を始める（4人）** などの作成用ボイスに入ってください。\n"
             "同じ名前のテキストも自動で作られます。1人1部屋までです。"
         ),
         color=0xC9893A,
@@ -365,6 +366,7 @@ async def on_app_error(
 
 register_rename(room, bot)
 register_setup_name(setup, bot)
+register_setup_hubname(setup, bot)
 register_silence(owner, bot)
 attach_bind(owner_bind_only, bot)
 bot.owner_group = owner
